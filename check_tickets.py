@@ -25,6 +25,7 @@ Environment variables:
   REPORT_EVERY_MIN    default 60  (workflow sets 115)
   ALERT_COOLDOWN_MIN  default 120   (ANY alert, same listing only)
   LOWER_BURST         default 10    (repeats of the lower-bowl alert)
+  MAX_QTY             default 3     (largest lot we'd buy; prices are per ticket)
   FORCE_NOTIFY        "1" to force a report + fake alerts (dispatch testing)
   STATE_PATH          default state.json
   HISTORY_PATH        default price_history.csv
@@ -50,6 +51,10 @@ NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
 REPORT_EVERY_MIN = int(os.environ.get("REPORT_EVERY_MIN", "60"))
 COOLDOWN_MIN = int(os.environ.get("ALERT_COOLDOWN_MIN", "120"))
 LOWER_BURST = int(os.environ.get("LOWER_BURST", "10"))
+# Max tickets we'd buy in one lot. Gametime prices are PER TICKET, so a
+# 2-seat lot at $499/ea beats a single at $514/ea -- widening this widens
+# the net considerably (60 eligible listings at qty 1, 144 at qty 3).
+MAX_QTY = int(os.environ.get("MAX_QTY", "3"))
 FORCE_NOTIFY = os.environ.get("FORCE_NOTIFY", "").strip() == "1"
 STATE_PATH = os.environ.get("STATE_PATH", "state.json")
 HISTORY_PATH = os.environ.get("HISTORY_PATH", "price_history.csv")
@@ -91,15 +96,18 @@ def fetch_listings():
     return listings
 
 
-def buyable_single(listing):
-    """True if this listing can be purchased as exactly one ticket.
+def buyable_qtys(listing):
+    """Lot sizes of this listing we would actually buy, smallest first.
 
-    Gametime prices a listing 'from' a lot size; a listing whose lots are
-    [2, 4] cannot be bought as a single and its price is not a price we
-    could ever pay.
+    Gametime sells a listing only in the lot sizes it lists: a listing whose
+    lots are [2, 4] cannot be bought as one ticket, and its price is not a
+    price we could ever pay as a single. Empty result means skip it.
     """
-    lots = listing.get("lots") or []
-    return 1 in lots
+    return sorted(q for q in (listing.get("lots") or []) if 1 <= q <= MAX_QTY)
+
+
+def buyable(listing):
+    return bool(buyable_qtys(listing))
 
 
 def dollars(cents):
@@ -108,7 +116,7 @@ def dollars(cents):
 
 def summarize(listings):
     """Cheapest single-ticket listing overall and per section group."""
-    singles = [x for x in listings if buyable_single(x)]
+    singles = [x for x in listings if buyable(x)]
 
     def cheapest(pool):
         pool = [x for x in pool if (x.get("price") or {}).get("total") is not None]
@@ -127,12 +135,22 @@ def summarize(listings):
     }
 
 
+def qty_label(listing):
+    """e.g. '1' or '2 or 3' -- the lot sizes we could buy this listing in."""
+    qs = buyable_qtys(listing)
+    if not qs:
+        return "?"
+    return qs[0] if len(qs) == 1 else " or ".join(str(q) for q in qs)
+
+
 def describe(listing):
     if not listing:
         return "none"
     p = listing["price"]
-    return (f"${dollars(p['total']):.0f} all-in (${dollars(p['prefee']):.0f} pre-fee) "
-            f"sec {listing.get('section')} row {listing.get('row')}")
+    return (f"${dollars(p['total']):.0f}/ticket all-in "
+            f"(${dollars(p['prefee']):.0f} pre-fee) "
+            f"sec {listing.get('section')} row {listing.get('row')}, "
+            f"buy {qty_label(listing)}")
 
 
 def load_state():
@@ -154,9 +172,11 @@ def append_history(row):
         w = csv.writer(f)
         if not exists:
             w.writerow([
-                "timestamp_utc", "n_listings", "n_single_listings",
+                "timestamp_utc", "n_listings", "n_buyable_listings",
                 "low_all_in", "low_prefee", "low_group", "low_section", "low_row",
+                "low_qty",
                 "lower_all_in", "lower_prefee", "lower_section", "lower_row",
+                "lower_qty",
             ])
         w.writerow(row)
 
@@ -227,7 +247,7 @@ def main():
     overall, lower = s["overall"], s["lower"]
 
     if overall is None:
-        log("no single-ticket listings at all right now")
+        log(f"nothing buyable in lots of 1-{MAX_QTY} right now")
         state["last_seen"] = {"at": now.isoformat(timespec="seconds"), "singles": 0}
         save_state(state)
         return 0
@@ -240,12 +260,13 @@ def main():
     append_history([
         now.isoformat(timespec="seconds"), s["n_listings"], s["n_singles"],
         f"{o_total:.2f}", f"{o_pre:.2f}", overall.get("section_group"),
-        overall.get("section"), overall.get("row"),
+        overall.get("section"), overall.get("row"), qty_label(overall),
         f"{l_total:.2f}" if l_total else "", f"{l_pre:.2f}" if l_pre else "",
         lower.get("section") if lower else "", lower.get("row") if lower else "",
+        qty_label(lower) if lower else "",
     ])
 
-    log(f"singles={s['n_singles']}/{s['n_listings']} "
+    log(f"buyable={s['n_singles']}/{s['n_listings']} "
         f"overall={describe(overall)} | lower={describe(lower)}")
 
     # --- Tier 3: lower bowl under the ceiling. The one that matters. -----------
@@ -253,8 +274,9 @@ def main():
     if lower_hit:
         notify(
             f"LOWER BOWL ${l_total:.0f}!! BUY NOW" if l_total else "LOWER BOWL TEST",
-            (f"Lower bowl single at ${l_total:.0f} all-in "
-             f"(sec {lower.get('section')}, row {lower.get('row')}). "
+            (f"Lower bowl at ${l_total:.0f}/ticket all-in "
+             f"(sec {lower.get('section')}, row {lower.get('row')}, "
+             f"buy {qty_label(lower)}). "
              f"This is the one. Open Gametime and buy it."
              if lower else "forced test of the lower-bowl alert path"),
             priority="max",
@@ -275,9 +297,10 @@ def main():
     if any_hit and (is_new_offer or due(state, "last_any_alert", COOLDOWN_MIN)):
         notify(
             f"OU-TX under ${PRICE_CEILING:.0f}: ${o_total:.0f} all-in",
-            (f"Cheapest single is ${o_total:.0f} all-in in the "
+            (f"Cheapest is ${o_total:.0f}/ticket all-in in the "
              f"{overall.get('section_group')} bowl "
-             f"(sec {overall.get('section')}, row {overall.get('row')}). "
+             f"(sec {overall.get('section')}, row {overall.get('row')}, "
+             f"buy {qty_label(overall)}). "
              f"Lower bowl floor is "
              f"{f'${l_total:.0f}' if l_total else 'n/a'}."),
             priority="urgent",
@@ -299,13 +322,13 @@ def main():
         notify(
             f"OU-TX: ${o_total:.0f} low / "
             f"{f'${l_total:.0f}' if l_total else 'n/a'} lower bowl",
-            (f"Cheapest single ticket: ${o_total:.0f} all-in "
-             f"(${o_pre:.0f} pre-fee), {overall.get('section_group')} "
-             f"sec {overall.get('section')} row {overall.get('row')}{trend}.\n"
+            (f"Cheapest: ${o_total:.0f}/ticket all-in (${o_pre:.0f} pre-fee), "
+             f"{overall.get('section_group')} sec {overall.get('section')} "
+             f"row {overall.get('row')}, buy {qty_label(overall)}{trend}.\n"
              f"Lower bowl: "
-             f"{describe(lower) if lower else 'no single-ticket listings'}.\n"
-             f"{s['n_singles']} of {s['n_listings']} listings sell as singles. "
-             f"Target ${PRICE_CEILING:.0f} all-in."),
+             f"{describe(lower) if lower else 'nothing buyable in 1-' + str(MAX_QTY)}.\n"
+             f"{s['n_singles']} of {s['n_listings']} listings sell in lots of "
+             f"1-{MAX_QTY}. Target ${PRICE_CEILING:.0f}/ticket all-in."),
             priority="low",
             tags="chart_with_upwards_trend",
         )

@@ -1,7 +1,9 @@
 # Red River ticket watch
 
-Hunting **one** ticket to Oklahoma vs Texas, Cotton Bowl, Sat Oct 10 2026 2:30pm CT,
-for **under $400 all-in**, preferably lower bowl.
+Hunting tickets to Oklahoma vs Texas, Cotton Bowl, Sat Oct 10 2026 2:30pm CT,
+for **under $400 per ticket all-in**, preferably lower bowl. Lots of **1, 2 or 3**
+are all in play — Gametime prices are per ticket, so a pair can be cheaper per
+seat than any single on the board.
 
 ## How it works
 
@@ -14,8 +16,8 @@ Three notification tiers:
 | Tier | Trigger | ntfy priority | Behaviour |
 |---|---|---|---|
 | Summary | every 2 hours | `low` | lowest overall + lowest lower bowl |
-| Any seat | cheapest single ≤ $400 all-in | `urgent` | 2 pushes, 2h cooldown |
-| **Lower bowl** | lower bowl single ≤ $400 all-in | `max` | **10 pushes, every run, no cooldown** |
+| Any seat | cheapest ≤ $400/ticket all-in | `urgent` | 2 pushes, 2h cooldown |
+| **Lower bowl** | lower bowl ≤ $400/ticket all-in | `max` | **10 pushes, every run, no cooldown** |
 
 ### Why Gametime and not SeatGeek
 
@@ -25,11 +27,14 @@ give. Gametime returns per-listing `section`, `row`, `section_group` and both
 `prefee` and `total` (all-in) prices, which is what makes the lower-bowl split
 and the true all-in comparison possible.
 
-### The single-ticket filter matters
+### The lot-size filter matters
 
-Of 363 listings at the time of writing, only **60** can be bought as one ticket.
-The advertised "from" price is usually a pair. Filtering on `1 in listing["lots"]`
-is the difference between a reported price you can pay and one you can't.
+A listing sells only in the lot sizes in its `lots` array: `[2, 4]` cannot be
+bought as one ticket, so its price is not a price you could ever pay. Of 364
+listings at the time of writing, **60** sell as a single and **144** sell in a
+lot of 1-3. Prices are per ticket, so widening from 1 to 3 both widens the net
+and lowered the observed floor from $514 to $505 — a 2-seat lot beat every
+single on the board.
 
 ## Data
 
