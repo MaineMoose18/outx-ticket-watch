@@ -16,8 +16,16 @@ Three notification tiers:
 | Tier | Trigger | ntfy priority | Behaviour |
 |---|---|---|---|
 | Summary | every 2 hours | `low` | lowest overall + lowest lower bowl |
-| Any seat | any group/lot ≤ $400/ticket all-in | `urgent` | 2 pushes, 2h cooldown |
-| **Lower bowl** | lower bowl, any lot ≤ $400/ticket | `max` | **10 pushes, every run, no cooldown** |
+| Any seat | any group/lot ≤ $400/ticket all-in | `urgent` | 2 pushes, re-fires on a new/cheaper listing |
+| Lower bowl watch | lower bowl ≤ $500/ticket | `max` | 3 pushes, re-fires on a new/cheaper listing |
+| **Lower bowl siren** | lower bowl ≤ $400/ticket | `max` | **10 pushes, every run, no cooldown** |
+
+The lower bowl gets a looser line than everything else because it is the seat
+we actually want. The two lower-bowl tiers exist because $500 is a plausible
+resting price, not just a spike: if a $495 floor sat there for days, an
+every-run siren would send 700+ pushes a day and train us to mute the topic —
+which would then bury the $400 alert that matters. So $500 tells you the moment
+it happens and whenever it improves; $400 never shuts up.
 
 ### Why Gametime and not SeatGeek
 

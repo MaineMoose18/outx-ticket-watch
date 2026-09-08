@@ -21,16 +21,19 @@ meaning: best upper-bowl price is $505/ticket buying 1; best lower-bowl price
 is $636/ticket buying 2, and a single in the lower bowl would run $670.
 
 Notification tiers:
-  SUMMARY      every 2 hours, low priority.
-  ANY <=400    urgent. Re-fires on a different or cheaper listing.
-  LOWER <=400  max priority, repeated burst, every run, no cooldown.
+  SUMMARY       every 2 hours, low priority.
+  ANY <=400     urgent. Re-fires on a different or cheaper listing.
+  LOWER <=500   max priority, short burst. Re-fires on a different or cheaper
+                listing, so a floor parked at $495 does not scream forever.
+  LOWER <=400   the siren: long burst, every single run, no cooldown.
 
 Prices from the API are in CENTS and are PER TICKET.
 
 Environment variables:
   NTFY_TOPIC          required for alerts.
   GT_EVENT_ID         default 692f4b0348de0b1d9c246950
-  PRICE_CEILING       default 400   (per ticket, all-in, dollars)
+  PRICE_CEILING       default 400   (per ticket, all-in, dollars; any group)
+  LOWER_CEILING       default 500   (lower bowl "tell me now" line)
   MAX_QTY             default 3     (screen lot sizes 1..MAX_QTY separately)
   REPORT_EVERY_MIN    default 60    (workflow sets 115)
   ALERT_COOLDOWN_MIN  default 120   (ANY alert, same listing only)
@@ -56,6 +59,10 @@ BUY_URL = ("https://gametime.co/college-football/red-river-rivalry-texas-longhor
            "events/" + EVENT_ID)
 
 PRICE_CEILING = float(os.environ.get("PRICE_CEILING", "400"))
+# The lower bowl gets its own, looser trigger: worth knowing about immediately
+# even well above the buy target. PRICE_CEILING remains the lower-bowl siren
+# line -- see the two lower-bowl tiers in main().
+LOWER_CEILING = float(os.environ.get("LOWER_CEILING", "500"))
 MAX_QTY = int(os.environ.get("MAX_QTY", "3"))
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
 REPORT_EVERY_MIN = int(os.environ.get("REPORT_EVERY_MIN", "60"))
@@ -287,15 +294,39 @@ def main():
             f"q{q}=" + (f"${dollars(price_of(l)):.0f}" if l else "-")
             for q, l in sorted(row.items())))
 
-    # --- Tier 3: lower bowl under the ceiling, at any lot size. ---------------
-    if (l_total is not None and l_total <= PRICE_CEILING) or FORCE_NOTIFY:
-        notify(
-            f"LOWER ${l_total:.0f} ({l_qty})!! BUY NOW" if l_best else "LOWER TEST",
-            (f"{line}\nSec {l_best.get('section')} row {l_best.get('row')}. "
-             f"This is the one. Open Gametime and buy it."
-             if l_best else "forced test of the lower-bowl alert path"),
-            priority="max", tags="rotating_light,fire", burst=LOWER_BURST)
-        state["last_lower_alert"] = now.isoformat(timespec="seconds")
+    # --- Tier 3: the lower bowl, on two lines. -------------------------------
+    # At or under PRICE_CEILING this is the outcome the whole system exists for,
+    # so it fires every run, forever, until it is gone. Between there and
+    # LOWER_CEILING it is worth knowing immediately but could plausibly sit for
+    # days -- so it re-fires on a new or cheaper listing rather than every run,
+    # which keeps a $495 floor from training us to mute the topic.
+    if l_total is not None or FORCE_NOTIFY:
+        siren = FORCE_NOTIFY or l_total <= PRICE_CEILING
+        watch = FORCE_NOTIFY or l_total <= LOWER_CEILING
+        lp_id = l_best.get("id") if l_best else None
+        prev_lid = state.get("last_lower_id")
+        prev_lprice = state.get("last_lower_price")
+        fresh = (lp_id != prev_lid or prev_lprice is None or l_total < prev_lprice)
+
+        if siren:
+            notify(
+                f"LOWER ${l_total:.0f} ({l_qty})!! BUY NOW" if l_best else "LOWER TEST",
+                (f"{line}\nSec {l_best.get('section')} row {l_best.get('row')}. "
+                 f"Under ${PRICE_CEILING:.0f}. This is the one -- buy it."
+                 if l_best else "forced test of the lower-bowl alert path"),
+                priority="max", tags="rotating_light,fire", burst=LOWER_BURST)
+            state["last_lower_alert"] = now.isoformat(timespec="seconds")
+        elif watch and (fresh or due(state, "last_lower_alert", COOLDOWN_MIN)):
+            notify(
+                f"LOWER ${l_total:.0f} ({l_qty}) - under ${LOWER_CEILING:.0f}",
+                f"{line}\nSec {l_best.get('section')} row {l_best.get('row')}. "
+                f"Lower bowl is worth a look right now.",
+                priority="max", tags="rotating_light", burst=3)
+            state["last_lower_alert"] = now.isoformat(timespec="seconds")
+
+        if watch:
+            state["last_lower_id"] = lp_id
+            state["last_lower_price"] = l_total
 
     # --- Tier 2: anything under the ceiling. ---------------------------------
     # The cooldown suppresses re-alerting on the SAME listing. A different
@@ -328,7 +359,7 @@ def main():
                 for q, l in sorted(row.items())))
         notify(line + trend,
                "\n".join(detail) + f"\nper ticket all-in, lots of 1-{MAX_QTY}. "
-               f"Target ${PRICE_CEILING:.0f}.",
+               f"Alert at ${PRICE_CEILING:.0f}, lower bowl ${LOWER_CEILING:.0f}.",
                priority="low", tags="chart_with_upwards_trend")
         state["last_report"] = now.isoformat(timespec="seconds")
 

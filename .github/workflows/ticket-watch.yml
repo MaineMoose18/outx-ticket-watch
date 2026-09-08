@@ -40,6 +40,7 @@ jobs:
           ALERT_COOLDOWN_MIN: "120"
           LOWER_BURST: "10"
           MAX_QTY: "3"
+          LOWER_CEILING: "500"
           FORCE_NOTIFY: ${{ github.event.inputs.force_notify == 'true' && '1' || '0' }}
         run: python3 check_tickets.py
 
