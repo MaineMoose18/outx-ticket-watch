@@ -16,8 +16,8 @@ Three notification tiers:
 | Tier | Trigger | ntfy priority | Behaviour |
 |---|---|---|---|
 | Summary | every 2 hours | `low` | lowest overall + lowest lower bowl |
-| Any seat | cheapest ≤ $400/ticket all-in | `urgent` | 2 pushes, 2h cooldown |
-| **Lower bowl** | lower bowl ≤ $400/ticket all-in | `max` | **10 pushes, every run, no cooldown** |
+| Any seat | any group/lot ≤ $400/ticket all-in | `urgent` | 2 pushes, 2h cooldown |
+| **Lower bowl** | lower bowl, any lot ≤ $400/ticket | `max` | **10 pushes, every run, no cooldown** |
 
 ### Why Gametime and not SeatGeek
 
@@ -27,14 +27,33 @@ give. Gametime returns per-listing `section`, `row`, `section_group` and both
 `prefee` and `total` (all-in) prices, which is what makes the lower-bowl split
 and the true all-in comparison possible.
 
-### The lot-size filter matters
+### Report format
 
-A listing sells only in the lot sizes in its `lots` array: `[2, 4]` cannot be
-bought as one ticket, so its price is not a price you could ever pay. Of 364
-listings at the time of writing, **60** sell as a single and **144** sell in a
-lot of 1-3. Prices are per ticket, so widening from 1 to 3 both widens the net
-and lowered the observed floor from $514 to $505 — a 2-seat lot beat every
-single on the board.
+Terse on purpose; it is read at a glance on a lock screen.
+
+```
+$499 (2, upper; $514 single); $636 (1, lower)
+```
+
+Best upper-bowl price is $499/ticket buying a pair, and a single up there would
+be $514. Best lower-bowl price is $636/ticket buying one. Groups are listed
+cheapest first, and the single price is appended only when the best deal needs
+more than one seat.
+
+### Screening each lot size separately matters
+
+A listing sells only in the lot sizes in its `lots` array: `[2, 4]` is a valid
+pair but can never be a single, and `[1, 3]` is a valid single and triplet but
+not a pair. Prices are per ticket, so the best pair price is not derivable from
+the best single price — they have to be screened independently. First reading:
+
+| | Buy 1 | Buy 2 | Buy 3 |
+|---|---|---|---|
+| Lower | **$636** | $640 | $651 |
+| Upper | $514 | **$499** | $514 |
+
+Pairs are cheapest in the upper bowl, singles in the lower. Collapsing these
+into one number would hide that.
 
 ## Data
 

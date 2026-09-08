@@ -1,12 +1,1 @@
-{
-  "all_time_low_lower": 636.0,
-  "all_time_low_overall": 505.0,
-  "consecutive_failures": 0,
-  "last_report": "2026-09-08T21:11:44+00:00",
-  "last_seen": {
-    "at": "2026-09-08T21:11:44+00:00",
-    "lower_all_in": 636.0,
-    "overall_all_in": 505.0,
-    "singles": 144
-  }
-}
+{}

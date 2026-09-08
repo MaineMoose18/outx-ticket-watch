@@ -2,31 +2,40 @@
 """
 Red River Rivalry (OU vs Texas, Cotton Bowl, 2026-10-10) ticket watcher.
 
-Polls Gametime's public listings API for the game, filters to listings that
-can actually be bought as a SINGLE ticket, logs every observation to CSV, and
-pushes phone notifications via ntfy.
+Polls Gametime's public listings API and screens each lot size separately --
+singles, pairs and triplets are three independent searches, because a listing
+sells only in the lot sizes in its `lots` array and the per-ticket price
+differs between them. Logs every observation to CSV and pushes phone alerts
+via ntfy.
 
 Why Gametime and not SeatGeek: the SeatGeek Platform API returns `stats: {}`
 for this event (primary is Paciolan, is_open=false), so it has no price data
 to give. Gametime returns per-listing section, row, section_group and both
-pre-fee and all-in prices -- which is what makes the lower-bowl split possible.
+pre-fee and all-in prices.
+
+Report format is deliberately terse -- it is read at a glance on a lock screen:
+
+    $505 (1, upper); $636 (2, lower; $670 single)
+
+meaning: best upper-bowl price is $505/ticket buying 1; best lower-bowl price
+is $636/ticket buying 2, and a single in the lower bowl would run $670.
 
 Notification tiers:
-  SUMMARY      every 2 hours, low priority. Lowest overall + lowest lower bowl.
-  ANY <=400    urgent, one alert per cooldown window.
-  LOWER <=400  max priority, repeated burst, every single run, no cooldown.
+  SUMMARY      every 2 hours, low priority.
+  ANY <=400    urgent. Re-fires on a different or cheaper listing.
+  LOWER <=400  max priority, repeated burst, every run, no cooldown.
 
-Prices from the API are in CENTS. Everything below works in dollars.
+Prices from the API are in CENTS and are PER TICKET.
 
 Environment variables:
   NTFY_TOPIC          required for alerts.
   GT_EVENT_ID         default 692f4b0348de0b1d9c246950
-  PRICE_CEILING       default 400   (all-in dollars)
-  REPORT_EVERY_MIN    default 60  (workflow sets 115)
+  PRICE_CEILING       default 400   (per ticket, all-in, dollars)
+  MAX_QTY             default 3     (screen lot sizes 1..MAX_QTY separately)
+  REPORT_EVERY_MIN    default 60    (workflow sets 115)
   ALERT_COOLDOWN_MIN  default 120   (ANY alert, same listing only)
   LOWER_BURST         default 10    (repeats of the lower-bowl alert)
-  MAX_QTY             default 3     (largest lot we'd buy; prices are per ticket)
-  FORCE_NOTIFY        "1" to force a report + fake alerts (dispatch testing)
+  FORCE_NOTIFY        "1" to force all tiers (dispatch testing)
   STATE_PATH          default state.json
   HISTORY_PATH        default price_history.csv
 """
@@ -47,22 +56,20 @@ BUY_URL = ("https://gametime.co/college-football/red-river-rivalry-texas-longhor
            "events/" + EVENT_ID)
 
 PRICE_CEILING = float(os.environ.get("PRICE_CEILING", "400"))
+MAX_QTY = int(os.environ.get("MAX_QTY", "3"))
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
 REPORT_EVERY_MIN = int(os.environ.get("REPORT_EVERY_MIN", "60"))
 COOLDOWN_MIN = int(os.environ.get("ALERT_COOLDOWN_MIN", "120"))
 LOWER_BURST = int(os.environ.get("LOWER_BURST", "10"))
-# Max tickets we'd buy in one lot. Gametime prices are PER TICKET, so a
-# 2-seat lot at $499/ea beats a single at $514/ea -- widening this widens
-# the net considerably (60 eligible listings at qty 1, 144 at qty 3).
-MAX_QTY = int(os.environ.get("MAX_QTY", "3"))
 FORCE_NOTIFY = os.environ.get("FORCE_NOTIFY", "").strip() == "1"
 STATE_PATH = os.environ.get("STATE_PATH", "state.json")
 HISTORY_PATH = os.environ.get("HISTORY_PATH", "price_history.csv")
 
-# Cotton Bowl: Gametime groups sections as "Lower" / "Upper". Anything it
-# doesn't classify goes in its own bucket rather than being dropped or
-# silently counted as lower bowl.
-LOWER_GROUP = "Lower"
+# Gametime groups Cotton Bowl sections as "Lower" / "Upper". Anything it does
+# not classify gets its own bucket rather than being dropped or silently
+# counted as lower bowl.
+LOWER = "Lower"
+UPPER = "Upper"
 
 TIMEOUT = 25
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -75,11 +82,10 @@ def log(msg):
 
 def fetch_listings():
     """Return the list of listing dicts, or None on failure."""
-    url = LISTINGS_API.format(event_id=EVENT_ID)
-    req = urllib.request.Request(url, headers={
-        "User-Agent": UA,
-        "Accept": "application/json",
-    })
+    req = urllib.request.Request(
+        LISTINGS_API.format(event_id=EVENT_ID),
+        headers={"User-Agent": UA, "Accept": "application/json"},
+    )
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
             data = json.loads(r.read().decode())
@@ -96,61 +102,63 @@ def fetch_listings():
     return listings
 
 
-def buyable_qtys(listing):
-    """Lot sizes of this listing we would actually buy, smallest first.
-
-    Gametime sells a listing only in the lot sizes it lists: a listing whose
-    lots are [2, 4] cannot be bought as one ticket, and its price is not a
-    price we could ever pay as a single. Empty result means skip it.
-    """
-    return sorted(q for q in (listing.get("lots") or []) if 1 <= q <= MAX_QTY)
-
-
-def buyable(listing):
-    return bool(buyable_qtys(listing))
-
-
 def dollars(cents):
     return None if cents is None else cents / 100.0
 
 
-def summarize(listings):
-    """Cheapest single-ticket listing overall and per section group."""
-    singles = [x for x in listings if buyable(x)]
-
-    def cheapest(pool):
-        pool = [x for x in pool if (x.get("price") or {}).get("total") is not None]
-        return min(pool, key=lambda x: x["price"]["total"]) if pool else None
-
-    groups = {}
-    for x in singles:
-        groups.setdefault(x.get("section_group") or "Unknown", []).append(x)
-
-    return {
-        "n_listings": len(listings),
-        "n_singles": len(singles),
-        "overall": cheapest(singles),
-        "lower": cheapest(groups.get(LOWER_GROUP, [])),
-        "by_group": {g: cheapest(v) for g, v in groups.items()},
-    }
+def price_of(listing):
+    return (listing.get("price") or {}).get("total")
 
 
-def qty_label(listing):
-    """e.g. '1' or '2 or 3' -- the lot sizes we could buy this listing in."""
-    qs = buyable_qtys(listing)
-    if not qs:
-        return "?"
-    return qs[0] if len(qs) == 1 else " or ".join(str(q) for q in qs)
+def cheapest_at(listings, group, qty):
+    """Cheapest listing in `group` that can be bought in a lot of exactly `qty`.
+
+    A listing sells only in the lot sizes in its `lots` array: lots [2, 4] is a
+    valid pair but can never be a single, and lots [1, 3] is a valid single and
+    triplet but not a pair. Screening each quantity separately is the point --
+    the per-ticket price of the best pair is not derivable from the best single.
+    """
+    pool = [x for x in listings
+            if x.get("section_group") == group
+            and qty in (x.get("lots") or [])
+            and price_of(x) is not None]
+    return min(pool, key=price_of) if pool else None
 
 
-def describe(listing):
+def screen(listings):
+    """grid[group][qty] -> cheapest listing, for every group and lot size."""
+    groups = sorted({x.get("section_group") or "Unknown" for x in listings})
+    return {g: {q: cheapest_at(listings, g, q) for q in range(1, MAX_QTY + 1)}
+            for g in groups}
+
+
+def best_in(row):
+    """(qty, listing) of the cheapest per-ticket price across lot sizes."""
+    have = [(q, l) for q, l in row.items() if l]
+    return min(have, key=lambda t: price_of(t[1])) if have else (None, None)
+
+
+def fmt_group(group, row):
+    """'$636 (2, lower; $670 single)' -- terse, for a lock screen."""
+    qty, listing = best_in(row)
     if not listing:
-        return "none"
-    p = listing["price"]
-    return (f"${dollars(p['total']):.0f}/ticket all-in "
-            f"(${dollars(p['prefee']):.0f} pre-fee) "
-            f"sec {listing.get('section')} row {listing.get('row')}, "
-            f"buy {qty_label(listing)}")
+        return None
+    price = dollars(price_of(listing))
+    out = f"${price:.0f} ({qty}, {group.lower()}"
+    if qty != 1:
+        single = row.get(1)
+        out += f"; ${dollars(price_of(single)):.0f} single" if single else "; no single"
+    return out + ")"
+
+
+def headline(grid):
+    """Every group, cheapest first: '$505 (1, upper); $636 (2, lower)'."""
+    parts = []
+    for g, row in grid.items():
+        qty, listing = best_in(row)
+        if listing:
+            parts.append((price_of(listing), fmt_group(g, row)))
+    return "; ".join(p for _, p in sorted(parts)) or "nothing listed"
 
 
 def load_state():
@@ -166,17 +174,26 @@ def save_state(state):
         json.dump(state, f, indent=2, sort_keys=True)
 
 
+def cell(grid, group, qty, field="price"):
+    l = grid.get(group, {}).get(qty)
+    if not l:
+        return ""
+    if field == "price":
+        return f"{dollars(price_of(l)):.2f}"
+    return l.get(field, "")
+
+
 def append_history(row):
     exists = os.path.exists(HISTORY_PATH)
     with open(HISTORY_PATH, "a", newline="") as f:
         w = csv.writer(f)
         if not exists:
             w.writerow([
-                "timestamp_utc", "n_listings", "n_buyable_listings",
-                "low_all_in", "low_prefee", "low_group", "low_section", "low_row",
-                "low_qty",
-                "lower_all_in", "lower_prefee", "lower_section", "lower_row",
-                "lower_qty",
+                "timestamp_utc", "n_listings",
+                "lower_q1", "lower_q2", "lower_q3",
+                "upper_q1", "upper_q2", "upper_q3",
+                "best_all_in", "best_qty", "best_group", "best_section", "best_row",
+                "lower_best_all_in", "lower_best_qty", "lower_section", "lower_row",
             ])
         w.writerow(row)
 
@@ -191,12 +208,8 @@ def notify(title, body, priority="default", tags="ticket", burst=1, gap=8):
         req = urllib.request.Request(
             f"https://ntfy.sh/{NTFY_TOPIC}",
             data=(body + suffix).encode("utf-8"),
-            headers={
-                "Title": title,
-                "Priority": priority,
-                "Tags": tags,
-                "Click": BUY_URL,
-            },
+            headers={"Title": title, "Priority": priority, "Tags": tags,
+                     "Click": BUY_URL},
             method="POST",
         )
         try:
@@ -229,122 +242,102 @@ def main():
         fails = int(state.get("consecutive_failures", 0)) + 1
         state["consecutive_failures"] = fails
         log(f"fetch failure #{fails}")
-        # Silence is indistinguishable from "no cheap tickets", so say it out loud.
+        # Silence is indistinguishable from "no cheap tickets", so say it aloud.
         if fails in (3, 12, 48):
-            notify(
-                "Ticket watcher is blind",
-                f"{fails} consecutive failed fetches from Gametime. "
-                f"The watcher is not checking prices right now -- go look at the "
-                f"Actions tab.",
-                priority="high",
-                tags="warning",
-            )
+            notify("Ticket watcher is blind",
+                   f"{fails} consecutive failed fetches from Gametime. Not "
+                   f"checking prices right now -- look at the Actions tab.",
+                   priority="high", tags="warning")
         save_state(state)
         return 0
 
     state["consecutive_failures"] = 0
-    s = summarize(listings)
-    overall, lower = s["overall"], s["lower"]
+    grid = screen(listings)
+    line = headline(grid)
 
-    if overall is None:
+    lower_row = grid.get(LOWER, {})
+    l_qty, l_best = best_in(lower_row)
+
+    # Cheapest across every group and lot size.
+    all_best = [(price_of(l), q, g, l)
+                for g, row in grid.items() for q, l in row.items() if l]
+    if not all_best:
         log(f"nothing buyable in lots of 1-{MAX_QTY} right now")
-        state["last_seen"] = {"at": now.isoformat(timespec="seconds"), "singles": 0}
+        state["last_seen"] = {"at": now.isoformat(timespec="seconds")}
         save_state(state)
         return 0
-
-    o_total = dollars(overall["price"]["total"])
-    o_pre = dollars(overall["price"]["prefee"])
-    l_total = dollars(lower["price"]["total"]) if lower else None
-    l_pre = dollars(lower["price"]["prefee"]) if lower else None
+    b_cents, b_qty, b_group, b_listing = min(all_best)
+    b_total = dollars(b_cents)
+    l_total = dollars(price_of(l_best)) if l_best else None
 
     append_history([
-        now.isoformat(timespec="seconds"), s["n_listings"], s["n_singles"],
-        f"{o_total:.2f}", f"{o_pre:.2f}", overall.get("section_group"),
-        overall.get("section"), overall.get("row"), qty_label(overall),
-        f"{l_total:.2f}" if l_total else "", f"{l_pre:.2f}" if l_pre else "",
-        lower.get("section") if lower else "", lower.get("row") if lower else "",
-        qty_label(lower) if lower else "",
+        now.isoformat(timespec="seconds"), len(listings),
+        cell(grid, LOWER, 1), cell(grid, LOWER, 2), cell(grid, LOWER, 3),
+        cell(grid, UPPER, 1), cell(grid, UPPER, 2), cell(grid, UPPER, 3),
+        f"{b_total:.2f}", b_qty, b_group,
+        b_listing.get("section"), b_listing.get("row"),
+        f"{l_total:.2f}" if l_total else "", l_qty or "",
+        l_best.get("section") if l_best else "",
+        l_best.get("row") if l_best else "",
     ])
 
-    log(f"buyable={s['n_singles']}/{s['n_listings']} "
-        f"overall={describe(overall)} | lower={describe(lower)}")
+    log(line)
+    for g, row in grid.items():
+        log("  " + g + ": " + ", ".join(
+            f"q{q}=" + (f"${dollars(price_of(l)):.0f}" if l else "-")
+            for q, l in sorted(row.items())))
 
-    # --- Tier 3: lower bowl under the ceiling. The one that matters. -----------
-    lower_hit = (l_total is not None and l_total <= PRICE_CEILING) or FORCE_NOTIFY
-    if lower_hit:
+    # --- Tier 3: lower bowl under the ceiling, at any lot size. ---------------
+    if (l_total is not None and l_total <= PRICE_CEILING) or FORCE_NOTIFY:
         notify(
-            f"LOWER BOWL ${l_total:.0f}!! BUY NOW" if l_total else "LOWER BOWL TEST",
-            (f"Lower bowl at ${l_total:.0f}/ticket all-in "
-             f"(sec {lower.get('section')}, row {lower.get('row')}, "
-             f"buy {qty_label(lower)}). "
+            f"LOWER ${l_total:.0f} ({l_qty})!! BUY NOW" if l_best else "LOWER TEST",
+            (f"{line}\nSec {l_best.get('section')} row {l_best.get('row')}. "
              f"This is the one. Open Gametime and buy it."
-             if lower else "forced test of the lower-bowl alert path"),
-            priority="max",
-            tags="rotating_light,fire",
-            burst=LOWER_BURST,
-        )
+             if l_best else "forced test of the lower-bowl alert path"),
+            priority="max", tags="rotating_light,fire", burst=LOWER_BURST)
         state["last_lower_alert"] = now.isoformat(timespec="seconds")
 
-    # --- Tier 2: anything under the ceiling. -----------------------------------
+    # --- Tier 2: anything under the ceiling. ---------------------------------
     # The cooldown suppresses re-alerting on the SAME listing. A different
     # listing, or a cheaper price, always re-fires: a $390 seat that sells and
     # is replaced by a $380 seat 40 minutes later is news, not a repeat.
-    any_hit = o_total <= PRICE_CEILING or FORCE_NOTIFY
     prev_id = state.get("last_any_alert_id")
     prev_price = state.get("last_any_alert_price")
-    is_new_offer = (overall.get("id") != prev_id
-                    or prev_price is None or o_total < prev_price)
-    if any_hit and (is_new_offer or due(state, "last_any_alert", COOLDOWN_MIN)):
-        notify(
-            f"OU-TX under ${PRICE_CEILING:.0f}: ${o_total:.0f} all-in",
-            (f"Cheapest is ${o_total:.0f}/ticket all-in in the "
-             f"{overall.get('section_group')} bowl "
-             f"(sec {overall.get('section')}, row {overall.get('row')}, "
-             f"buy {qty_label(overall)}). "
-             f"Lower bowl floor is "
-             f"{f'${l_total:.0f}' if l_total else 'n/a'}."),
-            priority="urgent",
-            tags="rotating_light",
-            burst=2,
-        )
+    is_new_offer = (b_listing.get("id") != prev_id
+                    or prev_price is None or b_total < prev_price)
+    if (b_total <= PRICE_CEILING or FORCE_NOTIFY) and (
+            is_new_offer or due(state, "last_any_alert", COOLDOWN_MIN)):
+        notify(f"Under ${PRICE_CEILING:.0f}: {line}",
+               f"Sec {b_listing.get('section')} row {b_listing.get('row')}, "
+               f"buy {b_qty}. Check the map and move.",
+               priority="urgent", tags="rotating_light", burst=2)
         state["last_any_alert"] = now.isoformat(timespec="seconds")
-        state["last_any_alert_id"] = overall.get("id")
-        state["last_any_alert_price"] = o_total
+        state["last_any_alert_id"] = b_listing.get("id")
+        state["last_any_alert_price"] = b_total
 
-    # --- Tier 1: the routine hourly report. ------------------------------------
+    # --- Tier 1: the routine summary. ----------------------------------------
     if due(state, "last_report", REPORT_EVERY_MIN) or FORCE_NOTIFY:
-        prev = (state.get("last_seen") or {}).get("overall_all_in")
+        prev = (state.get("last_seen") or {}).get("best")
         trend = ""
-        if prev is not None:
-            delta = o_total - prev
-            if abs(delta) >= 1:
-                trend = f" ({'+' if delta > 0 else ''}{delta:.0f} vs last report)"
-        notify(
-            f"OU-TX: ${o_total:.0f} low / "
-            f"{f'${l_total:.0f}' if l_total else 'n/a'} lower bowl",
-            (f"Cheapest: ${o_total:.0f}/ticket all-in (${o_pre:.0f} pre-fee), "
-             f"{overall.get('section_group')} sec {overall.get('section')} "
-             f"row {overall.get('row')}, buy {qty_label(overall)}{trend}.\n"
-             f"Lower bowl: "
-             f"{describe(lower) if lower else 'nothing buyable in 1-' + str(MAX_QTY)}.\n"
-             f"{s['n_singles']} of {s['n_listings']} listings sell in lots of "
-             f"1-{MAX_QTY}. Target ${PRICE_CEILING:.0f}/ticket all-in."),
-            priority="low",
-            tags="chart_with_upwards_trend",
-        )
+        if prev is not None and abs(b_total - prev) >= 1:
+            trend = f" ({'+' if b_total > prev else ''}{b_total - prev:.0f})"
+        detail = []
+        for g, row in grid.items():
+            detail.append(g + " " + " ".join(
+                f"{q}:" + (f"${dollars(price_of(l)):.0f}" if l else "-")
+                for q, l in sorted(row.items())))
+        notify(line + trend,
+               "\n".join(detail) + f"\nper ticket all-in, lots of 1-{MAX_QTY}. "
+               f"Target ${PRICE_CEILING:.0f}.",
+               priority="low", tags="chart_with_upwards_trend")
         state["last_report"] = now.isoformat(timespec="seconds")
 
-    # All-time lows, for the "is the floor drifting down" question.
-    for key, val in (("all_time_low_overall", o_total), ("all_time_low_lower", l_total)):
+    for key, val in (("all_time_low_overall", b_total), ("all_time_low_lower", l_total)):
         if val is not None and (state.get(key) is None or val < state[key]):
             state[key] = val
 
-    state["last_seen"] = {
-        "at": now.isoformat(timespec="seconds"),
-        "overall_all_in": o_total,
-        "lower_all_in": l_total,
-        "singles": s["n_singles"],
-    }
+    state["last_seen"] = {"at": now.isoformat(timespec="seconds"),
+                          "best": b_total, "lower": l_total, "line": line}
     save_state(state)
     return 0
 
