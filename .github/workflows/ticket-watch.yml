@@ -47,7 +47,7 @@ jobs:
         run: |
           git config user.name  "ticket-watch"
           git config user.email "actions@github.com"
-          git add -A price_history.csv state.json
+          git add -A
           git diff --staged --quiet && exit 0
           git commit -m "prices $(date -u +%Y-%m-%dT%H:%M)"
           # A manual dispatch can race the cron run; rebase instead of failing.
