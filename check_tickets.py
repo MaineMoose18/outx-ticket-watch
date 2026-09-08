@@ -12,7 +12,7 @@ to give. Gametime returns per-listing section, row, section_group and both
 pre-fee and all-in prices -- which is what makes the lower-bowl split possible.
 
 Notification tiers:
-  REPORT       once per hour, low priority. Lowest overall + lowest lower bowl.
+  SUMMARY      every 2 hours, low priority. Lowest overall + lowest lower bowl.
   ANY <=400    urgent, one alert per cooldown window.
   LOWER <=400  max priority, repeated burst, every single run, no cooldown.
 
@@ -22,8 +22,8 @@ Environment variables:
   NTFY_TOPIC          required for alerts.
   GT_EVENT_ID         default 692f4b0348de0b1d9c246950
   PRICE_CEILING       default 400   (all-in dollars)
-  REPORT_EVERY_MIN    default 60
-  ALERT_COOLDOWN_MIN  default 120   (applies to the ANY alert only)
+  REPORT_EVERY_MIN    default 60  (workflow sets 115)
+  ALERT_COOLDOWN_MIN  default 120   (ANY alert, same listing only)
   LOWER_BURST         default 10    (repeats of the lower-bowl alert)
   FORCE_NOTIFY        "1" to force a report + fake alerts (dispatch testing)
   STATE_PATH          default state.json
@@ -264,8 +264,15 @@ def main():
         state["last_lower_alert"] = now.isoformat(timespec="seconds")
 
     # --- Tier 2: anything under the ceiling. -----------------------------------
+    # The cooldown suppresses re-alerting on the SAME listing. A different
+    # listing, or a cheaper price, always re-fires: a $390 seat that sells and
+    # is replaced by a $380 seat 40 minutes later is news, not a repeat.
     any_hit = o_total <= PRICE_CEILING or FORCE_NOTIFY
-    if any_hit and due(state, "last_any_alert", COOLDOWN_MIN):
+    prev_id = state.get("last_any_alert_id")
+    prev_price = state.get("last_any_alert_price")
+    is_new_offer = (overall.get("id") != prev_id
+                    or prev_price is None or o_total < prev_price)
+    if any_hit and (is_new_offer or due(state, "last_any_alert", COOLDOWN_MIN)):
         notify(
             f"OU-TX under ${PRICE_CEILING:.0f}: ${o_total:.0f} all-in",
             (f"Cheapest single is ${o_total:.0f} all-in in the "
@@ -278,6 +285,8 @@ def main():
             burst=2,
         )
         state["last_any_alert"] = now.isoformat(timespec="seconds")
+        state["last_any_alert_id"] = overall.get("id")
+        state["last_any_alert_price"] = o_total
 
     # --- Tier 1: the routine hourly report. ------------------------------------
     if due(state, "last_report", REPORT_EVERY_MIN) or FORCE_NOTIFY:
