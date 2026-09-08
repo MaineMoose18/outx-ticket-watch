@@ -1,0 +1,54 @@
+name: Red River ticket watch
+
+on:
+  schedule:
+    # Every 20 minutes, off the hour (top-of-hour has the worst runner contention).
+    # ~72 runs/day. Private-repo free tier is 2,000 min/month; this uses ~1,600
+    # in September and ~720 in October, so it stays inside the free allowance.
+    - cron: "7,27,47 * * * *"
+  workflow_dispatch:
+    inputs:
+      force_notify:
+        description: "Fire all notification tiers regardless of price (tests the push path)"
+        type: boolean
+        default: false
+      price_ceiling:
+        description: "Override the all-in ceiling in dollars"
+        default: "400"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ticket-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      # ubuntu-latest ships python3; setup-python would add ~15s to every run.
+      - name: Check prices
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          GT_EVENT_ID: "692f4b0348de0b1d9c246950"
+          PRICE_CEILING: ${{ github.event.inputs.price_ceiling || '400' }}
+          REPORT_EVERY_MIN: "55"
+          ALERT_COOLDOWN_MIN: "120"
+          LOWER_BURST: "10"
+          FORCE_NOTIFY: ${{ github.event.inputs.force_notify == 'true' && '1' || '0' }}
+        run: python3 check_tickets.py
+
+      - name: Commit history
+        run: |
+          git config user.name  "ticket-watch"
+          git config user.email "actions@github.com"
+          git add -A price_history.csv state.json
+          git diff --staged --quiet && exit 0
+          git commit -m "prices $(date -u +%Y-%m-%dT%H:%M)"
+          # A manual dispatch can race the cron run; rebase instead of failing.
+          git pull --rebase --autostash || true
+          git push
