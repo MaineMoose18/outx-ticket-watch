@@ -13,7 +13,7 @@ Three notification tiers:
 
 | Tier | Trigger | ntfy priority | Behaviour |
 |---|---|---|---|
-| Report | once an hour | `low` | lowest overall + lowest lower bowl |
+| Summary | every 2 hours | `low` | lowest overall + lowest lower bowl |
 | Any seat | cheapest single ≤ $400 all-in | `urgent` | 2 pushes, 2h cooldown |
 | **Lower bowl** | lower bowl single ≤ $400 all-in | `max` | **10 pushes, every run, no cooldown** |
 

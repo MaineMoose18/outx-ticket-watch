@@ -36,7 +36,7 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           GT_EVENT_ID: "692f4b0348de0b1d9c246950"
           PRICE_CEILING: ${{ github.event.inputs.price_ceiling || '400' }}
-          REPORT_EVERY_MIN: "55"
+          REPORT_EVERY_MIN: "115"
           ALERT_COOLDOWN_MIN: "120"
           LOWER_BURST: "10"
           FORCE_NOTIFY: ${{ github.event.inputs.force_notify == 'true' && '1' || '0' }}
