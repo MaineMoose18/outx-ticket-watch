@@ -1,1 +1,14 @@
-{}
+{
+  "all_time_low_lower": 636.0,
+  "all_time_low_overall": 514.0,
+  "consecutive_failures": 0,
+  "last_any_alert": "2026-09-08T20:56:49+00:00",
+  "last_lower_alert": "2026-09-08T20:56:49+00:00",
+  "last_report": "2026-09-08T20:56:49+00:00",
+  "last_seen": {
+    "at": "2026-09-08T20:56:49+00:00",
+    "lower_all_in": 636.0,
+    "overall_all_in": 514.0,
+    "singles": 60
+  }
+}
