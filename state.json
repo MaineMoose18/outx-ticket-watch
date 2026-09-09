@@ -4,9 +4,9 @@
   "consecutive_failures": 0,
   "last_report": "2026-09-09T05:14:46+00:00",
   "last_seen": {
-    "at": "2026-09-09T06:55:23+00:00",
-    "best": 492.0,
-    "line": "$492 (2, upper; $517 single); $636 (1, lower)",
+    "at": "2026-09-09T07:07:28+00:00",
+    "best": 489.0,
+    "line": "$489 (2, upper; $517 single); $636 (1, lower)",
     "lower": 636.0
   }
 }
