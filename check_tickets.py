@@ -229,6 +229,29 @@ def notify(title, body, priority="default", tags="ticket", burst=1, gap=8):
     log(f"notified [{priority}] x{burst}: {title}")
 
 
+def heartbeat(line):
+    """Silent proof-of-life, on a sidecar topic the phone is not subscribed to.
+
+    The 3am health check used to count summary pushes, but those only land
+    every two hours: six of them look identical whether we polled 6 times or
+    180. That is exactly how a collapse from 20-minute checks to 2-hour checks
+    went unnoticed. This fires on every single poll at `min` priority, so the
+    checker can count real polls without anything reaching the lock screen.
+    """
+    if not NTFY_TOPIC:
+        return
+    req = urllib.request.Request(
+        f"https://ntfy.sh/{NTFY_TOPIC}-hb",
+        data=line.encode("utf-8"),
+        headers={"Priority": "min", "Tags": "heartbeat"},
+        method="POST",
+    )
+    try:
+        urllib.request.urlopen(req, timeout=TIMEOUT).read()
+    except Exception as e:
+        log(f"heartbeat failed: {e}")
+
+
 def due(state, key, minutes):
     ts = state.get(key)
     if not ts:
@@ -369,6 +392,7 @@ def main():
 
     state["last_seen"] = {"at": now.isoformat(timespec="seconds"),
                           "best": b_total, "lower": l_total, "line": line}
+    heartbeat(line)
     save_state(state)
     return 0
 
