@@ -1,11 +1,20 @@
 name: Red River ticket watch
 
+# GitHub's scheduler is unreliable at high frequency: on 2026-09-08 this repo
+# asked for 12 cron fires and got 2, both ~12 minutes late, which silently
+# turned a 20-minute watch into a 2-hour one. So cron no longer drives the
+# polling -- it is only a restarter for the chain below.
+#
+# The real mechanism: one job polls in a loop for five hours, then dispatches
+# the workflow again before it exits. Each link starts the next. Public repos
+# get unlimited Actions minutes, which is the only reason a job can afford to
+# sit in a sleep loop.
 on:
   schedule:
-    # Every 20 minutes, off the hour (top-of-hour has the worst runner contention).
-    # ~72 runs/day. Private-repo free tier is 2,000 min/month; this uses ~1,600
-    # in September and ~720 in October, so it stays inside the free allowance.
-    - cron: "7,27,47 * * * *"
+    # Restarter only. If a link ever fails to hand off, this picks the chain
+    # back up within a couple of hours. The concurrency group below keeps it
+    # from starting a second, parallel chain.
+    - cron: "13 */2 * * *"
   workflow_dispatch:
     inputs:
       force_notify:
@@ -18,20 +27,31 @@ on:
 
 permissions:
   contents: write
+  actions: write # required to dispatch the next link
 
 concurrency:
-  group: ticket-watch
+  # A force_notify run is a test and must not queue behind a 5-hour loop, so it
+  # gets its own group and runs immediately alongside the chain.
+  group: ticket-watch-${{ github.event.inputs.force_notify == 'true' && 'test' || 'main' }}
   cancel-in-progress: false
 
+env:
+  POLL_SECONDS: "240" # 15 checks/hour
+  RUN_MINUTES: "300" # 5h of polling, inside the 6h job ceiling
+  COMMIT_EVERY: "8" # persist history roughly every half hour
+
 jobs:
-  check:
+  watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 330
     steps:
       - uses: actions/checkout@v4
 
-      # ubuntu-latest ships python3; setup-python would add ~15s to every run.
-      - name: Check prices
+      - name: Record start
+        run: echo "STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+
+      # ubuntu-latest ships python3; setup-python would add ~15s per link.
+      - name: Poll
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           GT_EVENT_ID: "692f4b0348de0b1d9c246950"
@@ -42,15 +62,53 @@ jobs:
           MAX_QTY: "3"
           LOWER_CEILING: "500"
           FORCE_NOTIFY: ${{ github.event.inputs.force_notify == 'true' && '1' || '0' }}
-        run: python3 check_tickets.py
-
-      - name: Commit history
         run: |
+          set -u
           git config user.name  "ticket-watch"
           git config user.email "actions@github.com"
-          git add -A
-          git diff --staged --quiet && exit 0
-          git commit -m "prices $(date -u +%Y-%m-%dT%H:%M)"
-          # A manual dispatch can race the cron run; rebase instead of failing.
-          git pull --rebase --autostash || true
-          git push
+
+          persist() {
+            git add -A
+            git diff --staged --quiet && return 0
+            git commit -q -m "prices $(date -u +%Y-%m-%dT%H:%M)"
+            git pull -q --rebase --autostash || true
+            git push -q || echo "push failed; will retry next window"
+          }
+
+          # A force_notify run is a one-shot test of the push path. Looping it
+          # would fire every tier every four minutes for five hours. It also
+          # deliberately does NOT persist: it runs concurrently with a live
+          # link, and two writers appending to state.json and price_history.csv
+          # collide on rebase. Its checkout is thrown away.
+          if [ "$FORCE_NOTIFY" = "1" ]; then
+            exec python3 check_tickets.py
+          fi
+
+          END=$(( $(date +%s) + RUN_MINUTES * 60 ))
+          i=0
+          while [ "$(date +%s)" -lt "$END" ]; do
+            i=$(( i + 1 ))
+            echo "--- poll $i @ $(date -u +%H:%M:%S) ---"
+            # Never let one bad fetch break the chain; the script tracks its own
+            # consecutive-failure count and shouts through ntfy at 3/12/48.
+            python3 check_tickets.py || echo "check exited $?"
+            [ $(( i % COMMIT_EVERY )) -eq 0 ] && persist
+            sleep "$POLL_SECONDS"
+          done
+          persist
+          echo "completed $i polls"
+
+      - name: Start the next link
+        # always() so a crashed or timed-out link still hands off. Without this,
+        # one bad fetch would end the chain and the watch would go quiet.
+        if: always() && github.event.inputs.force_notify != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Floor on link length. If something makes the job die immediately --
+          # including a checkout failure, which skips "Record start" entirely
+          # and leaves STARTED_AT unset -- this caps the chain at ~6 restarts
+          # per hour instead of a hot spin.
+          ELAPSED=$(( $(date +%s) - ${STARTED_AT:-$(date +%s)} ))
+          if [ "$ELAPSED" -lt 600 ]; then sleep $(( 600 - ELAPSED )); fi
+          gh workflow run ticket-watch.yml -R "$GITHUB_REPOSITORY"
