@@ -2,11 +2,11 @@
   "all_time_low_lower": 630.0,
   "all_time_low_overall": 471.0,
   "consecutive_failures": 0,
-  "last_report": "2026-09-09T20:49:33+00:00",
+  "last_report": "2026-09-09T22:46:21+00:00",
   "last_seen": {
-    "at": "2026-09-09T22:14:02+00:00",
+    "at": "2026-09-09T22:46:21+00:00",
     "best": 517.0,
-    "line": "$517 (1, upper); $632 (1, lower)",
-    "lower": 632.0
+    "line": "$517 (1, upper); $633 (2, lower; $636 single)",
+    "lower": 633.0
   }
 }
