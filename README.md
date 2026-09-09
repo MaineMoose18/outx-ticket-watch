@@ -7,11 +7,11 @@ seat than any single on the board.
 
 ## How it works
 
-`check_tickets.py` polls Gametime's public listings API every 20 minutes from a
-GitHub Actions cron, keeps only listings that can be bought as a *single* ticket,
-and pushes to your phone through [ntfy](https://ntfy.sh).
+`check_tickets.py` polls Gametime's public listings API **every 4 minutes**,
+screens each lot size (1, 2, 3) independently, and pushes to your phone through
+[ntfy](https://ntfy.sh).
 
-Three notification tiers:
+Four notification tiers:
 
 | Tier | Trigger | ntfy priority | Behaviour |
 |---|---|---|---|
@@ -26,6 +26,37 @@ resting price, not just a spike: if a $495 floor sat there for days, an
 every-run siren would send 700+ pushes a day and train us to mute the topic —
 which would then bury the $400 alert that matters. So $500 tells you the moment
 it happens and whenever it improves; $400 never shuts up.
+
+### Why the workflow loops instead of using cron
+
+It used to run on `cron: "7,27,47 * * * *"`. On 2026-09-08 that asked for 12
+fires and got **2**, both about twelve minutes late — a silent 6× degradation
+from a 20-minute watch to a 2-hour one. Nothing errored, and the 2-hourly
+summaries kept arriving perfectly on time because the drop rate happened to
+match the summary interval, so from the phone it looked healthy.
+
+So cron no longer drives the polling. One job polls in a loop for five hours,
+then dispatches the workflow again before it exits; each link starts the next.
+`github.token` with `actions: write` is enough — `workflow_dispatch` is the
+documented exception to "GITHUB_TOKEN events don't create runs" — so there is
+no PAT anywhere. The cron is now `13 */2 * * *` and exists only to restart a
+chain that failed to hand off, and the concurrency group stops it forking a
+second chain.
+
+This is affordable only because the repo is public: unlimited Actions minutes.
+A job that sits in a sleep loop bills wall-clock time, which would burn the
+2,000-minute private allowance in under two days.
+
+### Knowing it is still alive
+
+Every poll posts the price line to `<topic>-hb` at `min` priority — a topic the
+phone is not subscribed to. The daily 3am check counts those and takes the
+*median gap* between them, so a slowdown shows up as a number instead of
+hiding behind summaries that still look punctual. It also reads the Actions run
+list over the public API to confirm a link is `in_progress`.
+
+Counting summaries could never have caught the cron failure: six of them look
+identical whether the watcher polled 6 times or 180.
 
 ### Why Gametime and not SeatGeek
 
