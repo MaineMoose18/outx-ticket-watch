@@ -7,9 +7,9 @@
   "last_any_alert_price": 394.0,
   "last_report": "2026-09-17T20:15:00+00:00",
   "last_seen": {
-    "at": "2026-09-17T20:56:09+00:00",
+    "at": "2026-09-17T21:28:23+00:00",
     "best": 433.0,
-    "line": "$433 (1, upper); $544 (2, lower; $576 single)",
-    "lower": 544.0
+    "line": "$433 (1, upper); $545 (2, lower; $571 single)",
+    "lower": 545.0
   }
 }
