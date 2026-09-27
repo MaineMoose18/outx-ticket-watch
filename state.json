@@ -8,9 +8,9 @@
   "last_lower_alert": "2026-09-27T18:59:56+00:00",
   "last_lower_id": "6ab1695e89b9872e7c131d66",
   "last_lower_price": 409.0,
-  "last_report": "2026-09-27T17:06:13+00:00",
+  "last_report": "2026-09-27T19:04:16+00:00",
   "last_seen": {
-    "at": "2026-09-27T18:59:56+00:00",
+    "at": "2026-09-27T19:32:33+00:00",
     "best": 331.0,
     "line": "$331 (2, upper; $375 single); $409 (2, lower; $452 single)",
     "lower": 409.0
