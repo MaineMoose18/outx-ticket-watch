@@ -10,9 +10,9 @@
   "last_lower_price": 417.0,
   "last_report": "2026-09-29T00:27:22+00:00",
   "last_seen": {
-    "at": "2026-09-29T00:35:27+00:00",
+    "at": "2026-09-29T01:07:47+00:00",
     "best": 350.0,
-    "line": "$350 (2, upper; $375 single); $417 (2, lower; $430 single)",
+    "line": "$350 (2, upper; $375 single); $417 (2, lower; $512 single)",
     "lower": 417.0
   }
 }
