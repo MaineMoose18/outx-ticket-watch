@@ -5,12 +5,12 @@
   "last_any_alert": "2026-10-04T03:17:42+00:00",
   "last_any_alert_id": "6abf1999bd5bb4f525d481f9",
   "last_any_alert_price": 341.0,
-  "last_lower_alert": "2026-10-04T03:17:42+00:00",
+  "last_lower_alert": "2026-10-04T03:50:00+00:00",
   "last_lower_id": "6abab6b8feb521fd25379f06",
   "last_lower_price": 391.0,
   "last_report": "2026-10-04T02:37:19+00:00",
   "last_seen": {
-    "at": "2026-10-04T03:17:42+00:00",
+    "at": "2026-10-04T03:50:00+00:00",
     "best": 341.0,
     "line": "$341 (2, upper; $346 single); $391 (2, lower; $435 single)",
     "lower": 391.0
