@@ -2,17 +2,17 @@
   "all_time_low_lower": 182.0,
   "all_time_low_overall": 182.0,
   "consecutive_failures": 0,
-  "last_any_alert": "2026-10-08T23:39:53+00:00",
-  "last_any_alert_id": "6ac7dafa11e5f174f705bbb4",
-  "last_any_alert_price": 256.0,
-  "last_lower_alert": "2026-10-08T23:43:55+00:00",
+  "last_any_alert": "2026-10-09T00:21:24+00:00",
+  "last_any_alert_id": "6ac695ad685e8f9e81076333",
+  "last_any_alert_price": 254.0,
+  "last_lower_alert": "2026-10-09T00:21:24+00:00",
   "last_lower_id": "6ac1189230c530fe74ef734d",
   "last_lower_price": 309.0,
   "last_report": "2026-10-08T23:15:42+00:00",
   "last_seen": {
-    "at": "2026-10-08T23:43:55+00:00",
-    "best": 256.0,
-    "line": "$256 (2, upper; $258 single); $309 (1, lower)",
+    "at": "2026-10-09T00:21:24+00:00",
+    "best": 254.0,
+    "line": "$254 (2, upper; $273 single); $309 (1, lower)",
     "lower": 309.0
   }
 }
